@@ -393,6 +393,14 @@ Both modes were run on the GitHub-hosted runner with builder commit `62e76da`
   * both headers carry the exact required cmdline; the vendor DTB is
     preserved at 212,093 bytes; the boot initrd contains 1,093 entries; the
     built-in verifier prints `verification: OK`.
+* **Artifact re-inspection** - the uploaded `x6882-droidian-boot-images`
+  artifact was downloaded again and checked independently: both image hashes
+  and the manifest verify, the 15,861,671-byte kernel blob at offset 4096
+  hashes to the manifest's `image_gz_sha256` and decompresses to a valid
+  arm64 `Image`, the busybox hardlink group keeps 214 names with a matching
+  `nlink` (the 215th was `/sbin/insmod`, now the intentional `/bin/kmod`
+  symlink), all 179 `modules.load` entries match the 179 copied `.ko` files,
+  and the vendor DTB is still 212,093 bytes.
 
 ## Local footprint
 

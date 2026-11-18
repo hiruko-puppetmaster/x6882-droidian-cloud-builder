@@ -104,7 +104,7 @@ cat > "${TARGET_DIR}/.gitignore" <<'X6882_FILE_01_64f4bfa6'
 X6882_FILE_01_64f4bfa6
 
 log "Writing README.md"
-cat > "${TARGET_DIR}/README.md" <<'X6882_FILE_02_8b00d81c'
+cat > "${TARGET_DIR}/README.md" <<'X6882_FILE_02_6bbbbe5f'
 # x6882-droidian-cloud-builder
 
 Build a Droidian (Trixie / Halium 13) kernel and boot images for the
@@ -500,6 +500,14 @@ Both modes were run on the GitHub-hosted runner with builder commit `62e76da`
   * both headers carry the exact required cmdline; the vendor DTB is
     preserved at 212,093 bytes; the boot initrd contains 1,093 entries; the
     built-in verifier prints `verification: OK`.
+* **Artifact re-inspection** - the uploaded `x6882-droidian-boot-images`
+  artifact was downloaded again and checked independently: both image hashes
+  and the manifest verify, the 15,861,671-byte kernel blob at offset 4096
+  hashes to the manifest's `image_gz_sha256` and decompresses to a valid
+  arm64 `Image`, the busybox hardlink group keeps 214 names with a matching
+  `nlink` (the 215th was `/sbin/insmod`, now the intentional `/bin/kmod`
+  symlink), all 179 `modules.load` entries match the 179 copied `.ko` files,
+  and the vendor DTB is still 212,093 bytes.
 
 ## Local footprint
 
@@ -512,7 +520,7 @@ flash) are needed on your machine.
 
 No license is declared. The files are porting glue for personal use; the
 kernel source and the Droidian packaging snippets keep their own licenses.
-X6882_FILE_02_8b00d81c
+X6882_FILE_02_6bbbbe5f
 
 log "Writing .github/workflows/build-droidian-kernel.yml"
 cat > "${TARGET_DIR}/.github/workflows/build-droidian-kernel.yml" <<'X6882_FILE_03_ac31360a'
@@ -2923,7 +2931,7 @@ log "Verifying SHA-256 checksums"
     cd "${TARGET_DIR}"
     sha256sum -c <<'X6882_CHECKSUMS_EOF'
 64f4bfa67884028c796f4461a9237dd06fb374e4a33f0fc4f4d7f32c54c68e65  .gitignore
-8b00d81c7a550b50fd65e3b30e2f66fcf30788610dc9fceb4410b66496b4663c  README.md
+6bbbbe5ff6fde6bdac0e07527064a9eb0cf03212b5a6e4ad3efd030c58bbe593  README.md
 ac31360a3287dfc59e35e906d14973e746f38aa25ed4971041b7d4010a1f00e5  .github/workflows/build-droidian-kernel.yml
 b8c3a973a8cd3d6745bd251dd60d9b82aa18404efe3e86d93d617aac785f9d85  anykernel/anykernel.sh
 875754f43a9bad35d01dc1aae52b6d028107e8433996c50e73a61978be347970  configs/droidian_x6882.conf
