@@ -39,9 +39,35 @@ SKIP_APT="${SKIP_APT:-0}"
 
 STAGING_REPO_LINE='deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/droidian.gpg] https://staging.repo.droidian.org/ trixie main'
 DROIDIAN_KEY='/etc/apt/trusted.gpg.d/droidian.gpg'
+# The build-essential image can ship the 2024 keyring, which no longer
+# verifies the current archive (signed by 5E775B2A27AB0C94).  The 2025
+# keyring package is fetched over HTTPS and pinned by SHA-256; gpgv was used
+# to confirm that this keyring verifies the current Release.gpg.
+DROIDIAN_KEYRING_URL='https://production.repo.droidian.org/pool/main/d/droidian-archive-keyring/droidian-archive-keyring_2025.01.06+git20250106145953.b4c3a11.next.production_all.deb'
+DROIDIAN_KEYRING_SHA256='c0ecf8aa8ab0dc198fca30748d50e0ccea1671e22ffcd651cf925dd7e48993cf'
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+download_file() {
+    local url="$1" out="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 5 --retry-delay 5 --max-time 300 -o "${out}" "${url}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "${out}" "${url}"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "${url}" "${out}" <<'PY'
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=300) as response:
+    with open(sys.argv[2], "wb") as handle:
+        handle.write(response.read())
+PY
+    else
+        fail "curl, wget and python3 are all missing; cannot fetch the Droidian keyring"
+    fi
+}
 
 [ "$(id -u)" -eq 0 ] || fail "this script must run as root inside the build container"
 [ -d "${KERNEL_SRC}" ] || fail "kernel tree not found: ${KERNEL_SRC}"
@@ -79,6 +105,16 @@ if [ "${SKIP_APT}" != "1" ]; then
         log "Droidian key: ${DROIDIAN_KEY} -> ${KEY_TARGET}"
     fi
 
+    log "Refreshing the Droidian archive keyring"
+    KEYRING_DEB="/tmp/droidian-archive-keyring.deb"
+    KEYRING_DIR="$(mktemp -d)"
+    download_file "${DROIDIAN_KEYRING_URL}" "${KEYRING_DEB}"
+    echo "${DROIDIAN_KEYRING_SHA256}  ${KEYRING_DEB}" | sha256sum -c -
+    dpkg-deb -x "${KEYRING_DEB}" "${KEYRING_DIR}"
+    install -m 0644 "${KEYRING_DIR}/usr/share/archive-keyrings/droidian.gpg" \
+        /usr/share/archive-keyrings/droidian.gpg
+    rm -rf "${KEYRING_DEB}" "${KEYRING_DIR}"
+
     log "Refreshing APT metadata"
     apt-get update -o Acquire::Retries=5
 
@@ -91,7 +127,8 @@ if [ "${SKIP_APT}" != "1" ]; then
         linux-initramfs-halium-generic:arm64 \
         lz4 \
         cpio \
-        kmod
+        kmod \
+        patch
 
     [ -f /usr/share/linux-packaging-snippets/kernel-snippet.mk ] || \
         fail "linux-packaging-snippets did not install kernel-snippet.mk"
@@ -116,7 +153,7 @@ git checkout -B feature/x6882
 rm -f debian/control
 rm -rf out debian/path-override
 
-git add -A debian arch/arm64/configs/x6882_droidian_defconfig
+git add -A
 git commit --allow-empty -m "x6882: Droidian packaging for kernel ${KERNEL_VERSION}"
 
 # releng-build-package regenerates this file; it must exist and be committed

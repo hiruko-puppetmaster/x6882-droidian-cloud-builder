@@ -43,6 +43,8 @@ workflow_dispatch
 | Path | Purpose |
 | --- | --- |
 | `configs/droidian_x6882.conf` | Droidian/Halium config fragment, validated against the pinned Halium `check-kernel-config` |
+| `patches/0001-fanotify-fionread-fixed-metadata-len.patch` | Restores the 5.10.226 fixed FIONREAD length; the rebased HEAD carries only part of a newer fanotify series |
+| `scripts/apply_kernel_patches.sh` | Applies `patches/*.patch` idempotently before the defconfig is prepared |
 | `scripts/prepare_kernel_cloud.sh` | Copies `gki_defconfig`, applies the fragment, runs the Halium checker, dedupes symbols, produces `x6882_droidian_defconfig` |
 | `debian/kernel-info.mk` | Droidian packaging settings: device identity, cmdline, boot header v4, toolchain |
 | `debian/rules` | Includes `linux-packaging-snippets/kernel-snippet.mk`, generates `debian/control`, checks the resolved `.config` |
@@ -302,6 +304,13 @@ restore your stock `vbmeta.img` too.
   are deduplicated with last-occurrence-wins, and a final read-only checker
   run must print `found no errors`. The checker exits 0 even when it reports
   errors, so its log is parsed explicitly.
+* `patches/0001-fanotify-fionread-fixed-metadata-len.patch` repairs the
+  `android12-5.10-rebased` HEAD: its `fanotify_ioctl()` was updated to call
+  `fanotify_event_len()` and `FANOTIFY_INFO_MODES`, but neither exists in the
+  tree. The patch restores the Linux 5.10.226 behavior (fixed metadata length)
+  so `CONFIG_FANOTIFY`, which the Halium checker requires, still builds.
+  `scripts/apply_kernel_patches.sh` applies it idempotently and fails loudly
+  if a future kernel update changes the context.
 * `debian/kernel-info.mk` sets `KERNEL_RELEASE = 5.10.274-infinix-x6882`,
   `KERNEL_BOOTIMAGE_VERSION = 4`, `KERNEL_INITRAMFS_COMPRESSION = lz4`,
   `DEVICE_HAS_INIT_BOOT = 0`, and the exact cmdline above.
@@ -310,6 +319,9 @@ restore your stock `vbmeta.img` too.
   `linux-packaging-snippets` and `linux-initramfs-halium-generic:arm64`,
   generates `debian/control`, and calls `releng-build-package` with
   `CI=true IS_CONTAINER=true RELENG_HOST_ARCH=arm64`.
+  The image can carry the 2024 archive keyring, which no longer verifies the
+  current archive; the script fetches the 2025 keyring package over HTTPS,
+  checks its pinned SHA-256 and installs `droidian.gpg` before `apt-get update`.
 * `debian/changelog` is created in the container from
   `debian/source/format` (`3.0 (native)`) and the `feature/x6882` branch, so
   `releng-build-package` produces a rolling `next`/trixie version such as

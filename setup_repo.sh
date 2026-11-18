@@ -79,6 +79,7 @@ log "Writing the repository to ${TARGET_DIR}"
 mkdir -p "${TARGET_DIR}/.github/workflows" \
          "${TARGET_DIR}/anykernel" \
          "${TARGET_DIR}/configs" \
+         "${TARGET_DIR}/patches" \
          "${TARGET_DIR}/debian/source" \
          "${TARGET_DIR}/scripts"
 
@@ -103,7 +104,7 @@ cat > "${TARGET_DIR}/.gitignore" <<'X6882_FILE_01_64f4bfa6'
 X6882_FILE_01_64f4bfa6
 
 log "Writing README.md"
-cat > "${TARGET_DIR}/README.md" <<'X6882_FILE_02_fb5ddbeb'
+cat > "${TARGET_DIR}/README.md" <<'X6882_FILE_02_34153a45'
 # x6882-droidian-cloud-builder
 
 Build a Droidian (Trixie / Halium 13) kernel and boot images for the
@@ -149,6 +150,8 @@ workflow_dispatch
 | Path | Purpose |
 | --- | --- |
 | `configs/droidian_x6882.conf` | Droidian/Halium config fragment, validated against the pinned Halium `check-kernel-config` |
+| `patches/0001-fanotify-fionread-fixed-metadata-len.patch` | Restores the 5.10.226 fixed FIONREAD length; the rebased HEAD carries only part of a newer fanotify series |
+| `scripts/apply_kernel_patches.sh` | Applies `patches/*.patch` idempotently before the defconfig is prepared |
 | `scripts/prepare_kernel_cloud.sh` | Copies `gki_defconfig`, applies the fragment, runs the Halium checker, dedupes symbols, produces `x6882_droidian_defconfig` |
 | `debian/kernel-info.mk` | Droidian packaging settings: device identity, cmdline, boot header v4, toolchain |
 | `debian/rules` | Includes `linux-packaging-snippets/kernel-snippet.mk`, generates `debian/control`, checks the resolved `.config` |
@@ -408,6 +411,13 @@ restore your stock `vbmeta.img` too.
   are deduplicated with last-occurrence-wins, and a final read-only checker
   run must print `found no errors`. The checker exits 0 even when it reports
   errors, so its log is parsed explicitly.
+* `patches/0001-fanotify-fionread-fixed-metadata-len.patch` repairs the
+  `android12-5.10-rebased` HEAD: its `fanotify_ioctl()` was updated to call
+  `fanotify_event_len()` and `FANOTIFY_INFO_MODES`, but neither exists in the
+  tree. The patch restores the Linux 5.10.226 behavior (fixed metadata length)
+  so `CONFIG_FANOTIFY`, which the Halium checker requires, still builds.
+  `scripts/apply_kernel_patches.sh` applies it idempotently and fails loudly
+  if a future kernel update changes the context.
 * `debian/kernel-info.mk` sets `KERNEL_RELEASE = 5.10.274-infinix-x6882`,
   `KERNEL_BOOTIMAGE_VERSION = 4`, `KERNEL_INITRAMFS_COMPRESSION = lz4`,
   `DEVICE_HAS_INIT_BOOT = 0`, and the exact cmdline above.
@@ -416,6 +426,9 @@ restore your stock `vbmeta.img` too.
   `linux-packaging-snippets` and `linux-initramfs-halium-generic:arm64`,
   generates `debian/control`, and calls `releng-build-package` with
   `CI=true IS_CONTAINER=true RELENG_HOST_ARCH=arm64`.
+  The image can carry the 2024 archive keyring, which no longer verifies the
+  current archive; the script fetches the 2025 keyring package over HTTPS,
+  checks its pinned SHA-256 and installs `droidian.gpg` before `apt-get update`.
 * `debian/changelog` is created in the container from
   `debian/source/format` (`3.0 (native)`) and the `feature/x6882` branch, so
   `releng-build-package` produces a rolling `next`/trixie version such as
@@ -472,10 +485,10 @@ flash) are needed on your machine.
 
 No license is declared. The files are porting glue for personal use; the
 kernel source and the Droidian packaging snippets keep their own licenses.
-X6882_FILE_02_fb5ddbeb
+X6882_FILE_02_34153a45
 
 log "Writing .github/workflows/build-droidian-kernel.yml"
-cat > "${TARGET_DIR}/.github/workflows/build-droidian-kernel.yml" <<'X6882_FILE_03_2de7ed6c'
+cat > "${TARGET_DIR}/.github/workflows/build-droidian-kernel.yml" <<'X6882_FILE_03_ac31360a'
 name: Build Droidian kernel for X6882
 
 on:
@@ -558,7 +571,7 @@ jobs:
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
             bc bison flex libssl-dev libelf-dev \
-            rsync cpio lz4 zip unzip python3 perl \
+            rsync cpio lz4 zip unzip python3 perl patch \
             build-essential binutils-aarch64-linux-gnu
 
       - name: Restore Clang
@@ -881,7 +894,7 @@ jobs:
             out/vbmeta-disabled.img
             out/manifest.txt
             out/SHA256SUMS
-X6882_FILE_03_2de7ed6c
+X6882_FILE_03_ac31360a
 
 log "Writing anykernel/anykernel.sh"
 cat > "${TARGET_DIR}/anykernel/anykernel.sh" <<'X6882_FILE_04_b8c3a973'
@@ -1355,8 +1368,59 @@ CONFIG_EVM=y
 # CONFIG_KGDB is not set
 X6882_FILE_05_f220ec04
 
+log "Writing patches/0001-fanotify-fionread-fixed-metadata-len.patch"
+cat > "${TARGET_DIR}/patches/0001-fanotify-fionread-fixed-metadata-len.patch" <<'X6882_FILE_06_3cd78700'
+From: X6882 Droidian cloud builder <ci@x6882.invalid>
+Subject: [PATCH] fanotify: restore fixed FIONREAD metadata length
+
+The android12-5.10-rebased HEAD carries the newer fanotify_ioctl()
+FIONREAD hunk that calls fanotify_event_len() and FANOTIFY_INFO_MODES,
+but the rest of that series (the helper and the UAPI flags) is not in
+the tree.  Clang 12 therefore fails with:
+
+  fs/notify/fanotify/fanotify_user.c:638:36: error: use of undeclared
+  identifier 'FANOTIFY_INFO_MODES'
+
+Report only the fixed event metadata length, exactly as Linux 5.10.226
+did before the incomplete backport.  Droidian does not depend on the
+variable-length FIONREAD result.
+
+Signed-off-by: X6882 Droidian cloud builder <ci@x6882.invalid>
+---
+ fs/notify/fanotify/fanotify_user.c | 6 ++----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+diff --git a/fs/notify/fanotify/fanotify_user.c b/fs/notify/fanotify/fanotify_user.c
+--- a/fs/notify/fanotify/fanotify_user.c
++++ b/fs/notify/fanotify/fanotify_user.c
+@@ -629,13 +629,11 @@ static long fanotify_ioctl(struct file *file, unsigned int cmd, unsigned long ar
+ {
+ 	struct fsnotify_group *group;
+ 	struct fsnotify_event *fsn_event;
+-	unsigned int info_mode;
+ 	void __user *p;
+ 	int ret = -ENOTTY;
+ 	size_t send_len = 0;
+ 
+ 	group = file->private_data;
+-	info_mode = FAN_GROUP_FLAG(group, FANOTIFY_INFO_MODES);
+ 
+ 	p = (void __user *) arg;
+ 
+@@ -643,8 +641,7 @@ static long fanotify_ioctl(struct file *file, unsigned int cmd, unsigned long ar
+ 	case FIONREAD:
+ 		spin_lock(&group->notification_lock);
+ 		list_for_each_entry(fsn_event, &group->notification_list, list)
+-			send_len += fanotify_event_len(info_mode,
+-						       FANOTIFY_E(fsn_event));
++			send_len += FAN_EVENT_METADATA_LEN;
+ 		spin_unlock(&group->notification_lock);
+ 		ret = put_user(send_len, (int __user *) p);
+ 		break;
+X6882_FILE_06_3cd78700
+
 log "Writing debian/check-config.sh"
-cat > "${TARGET_DIR}/debian/check-config.sh" <<'X6882_FILE_06_9680d49c'
+cat > "${TARGET_DIR}/debian/check-config.sh" <<'X6882_FILE_07_9680d49c'
 #!/usr/bin/env bash
 #
 # Assert the critical options in the kernel .config that olddefconfig
@@ -1446,10 +1510,10 @@ printf '  CONFIG_LOCALVERSION=%s\n' "$(grep '^CONFIG_LOCALVERSION=' "${CONFIG}" 
 printf '  CONFIG_CMDLINE=%s\n' "$(grep '^CONFIG_CMDLINE=' "${CONFIG}" || echo '<unset>')"
 printf '  %s\n' "$(grep '^CONFIG_LSM=' "${CONFIG}" || echo 'CONFIG_LSM=<unset>')"
 printf '  %s\n' "$(grep '^CONFIG_DEFAULT_SECURITY' "${CONFIG}" | tr '\n' ' ' || echo 'CONFIG_DEFAULT_SECURITY=<unset>')"
-X6882_FILE_06_9680d49c
+X6882_FILE_07_9680d49c
 
 log "Writing debian/copyright"
-cat > "${TARGET_DIR}/debian/copyright" <<'X6882_FILE_07_ead97536'
+cat > "${TARGET_DIR}/debian/copyright" <<'X6882_FILE_08_ead97536'
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: kernel_common_5.10
 Source: https://github.com/XTENSEI/kernel_common_5.10
@@ -1468,10 +1532,10 @@ License: GPL-2.0+
  under the terms of the GNU General Public License as published by the Free
  Software Foundation, either version 2 of the License, or (at your option)
  any later version.
-X6882_FILE_07_ead97536
+X6882_FILE_08_ead97536
 
 log "Writing debian/kernel-info.mk"
-cat > "${TARGET_DIR}/debian/kernel-info.mk" <<'X6882_FILE_08_562dacf3'
+cat > "${TARGET_DIR}/debian/kernel-info.mk" <<'X6882_FILE_09_562dacf3'
 # Kernel package settings for the Infinix Hot 50 4G (X6882, MediaTek MT6789).
 #
 # This tree is the kernel tree itself: the CI checkout of
@@ -1588,10 +1652,10 @@ DEB_BUILD_FOR = arm64
 
 KERNEL_ARCH = arm64
 KERNEL_BUILD_TARGET = Image.gz
-X6882_FILE_08_562dacf3
+X6882_FILE_09_562dacf3
 
 log "Writing debian/rules"
-cat > "${TARGET_DIR}/debian/rules" <<'X6882_FILE_09_ddf587e7'
+cat > "${TARGET_DIR}/debian/rules" <<'X6882_FILE_10_ddf587e7'
 #!/usr/bin/make -f
 #
 # Debian packaging rules for the X6882 Droidian kernel.
@@ -1637,15 +1701,69 @@ out/check-config.stamp: out/KERNEL_OBJ/.config debian/check-config.sh
 # prerequisite here runs the config check after .config has been generated
 # and before dh_auto_build starts compiling.
 override_dh_auto_configure: out/check-config.stamp
-X6882_FILE_09_ddf587e7
+X6882_FILE_10_ddf587e7
 
 log "Writing debian/source/format"
-cat > "${TARGET_DIR}/debian/source/format" <<'X6882_FILE_10_e8e18df4'
+cat > "${TARGET_DIR}/debian/source/format" <<'X6882_FILE_11_e8e18df4'
 3.0 (native)
-X6882_FILE_10_e8e18df4
+X6882_FILE_11_e8e18df4
+
+log "Writing scripts/apply_kernel_patches.sh"
+cat > "${TARGET_DIR}/scripts/apply_kernel_patches.sh" <<'X6882_FILE_12_6826bd61'
+#!/usr/bin/env bash
+#
+# Apply the small source fixes needed by the XTENSEI kernel tree.
+#
+#   scripts/apply_kernel_patches.sh <kernel-tree>
+#
+# Patches live in ../patches/*.patch and are applied with git apply.  Every
+# patch is checked first, so a kernel update that invalidates the context
+# fails the build instead of silently building an unpatched kernel.  Running
+# the script twice is safe: an already-applied patch is detected with a
+# reverse check.
+set -euo pipefail
+
+KERNEL_DIR="${1:?usage: apply_kernel_patches.sh <kernel-tree>}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATCH_DIR="${SCRIPT_DIR}/../patches"
+
+fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+[ -d "${KERNEL_DIR}" ] || fail "kernel tree not found: ${KERNEL_DIR}"
+command -v git >/dev/null || fail "git is required"
+
+shopt -s nullglob
+patches=("${PATCH_DIR}"/*.patch)
+if [ "${#patches[@]}" -eq 0 ]; then
+    printf 'No kernel patches in %s\n' "${PATCH_DIR}"
+    exit 0
+fi
+
+for patch_file in "${patches[@]}"; do
+    name="$(basename "${patch_file}")"
+
+    # git apply works inside and outside a repository and, unlike GNU patch,
+    # does not silently ignore -R when it thinks the patch is unreversed.
+    if git -C "${KERNEL_DIR}" apply --reverse --check "${patch_file}" \
+            >/dev/null 2>&1; then
+        printf 'already applied: %s\n' "${name}"
+        continue
+    fi
+
+    if ! git -C "${KERNEL_DIR}" apply --check "${patch_file}" \
+            >/dev/null 2>&1; then
+        printf 'ERROR: %s does not apply to %s\n' "${name}" "${KERNEL_DIR}" >&2
+        git -C "${KERNEL_DIR}" apply --check "${patch_file}" >&2 || true
+        exit 1
+    fi
+
+    git -C "${KERNEL_DIR}" apply "${patch_file}"
+    printf 'applied: %s\n' "${name}"
+done
+X6882_FILE_12_6826bd61
 
 log "Writing scripts/build_deb_in_container.sh"
-cat > "${TARGET_DIR}/scripts/build_deb_in_container.sh" <<'X6882_FILE_11_5216400a'
+cat > "${TARGET_DIR}/scripts/build_deb_in_container.sh" <<'X6882_FILE_13_c374a7ff'
 #!/usr/bin/env bash
 #
 # Build the X6882 Droidian kernel packages inside the official Droidian
@@ -1687,9 +1805,35 @@ SKIP_APT="${SKIP_APT:-0}"
 
 STAGING_REPO_LINE='deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/droidian.gpg] https://staging.repo.droidian.org/ trixie main'
 DROIDIAN_KEY='/etc/apt/trusted.gpg.d/droidian.gpg'
+# The build-essential image can ship the 2024 keyring, which no longer
+# verifies the current archive (signed by 5E775B2A27AB0C94).  The 2025
+# keyring package is fetched over HTTPS and pinned by SHA-256; gpgv was used
+# to confirm that this keyring verifies the current Release.gpg.
+DROIDIAN_KEYRING_URL='https://production.repo.droidian.org/pool/main/d/droidian-archive-keyring/droidian-archive-keyring_2025.01.06+git20250106145953.b4c3a11.next.production_all.deb'
+DROIDIAN_KEYRING_SHA256='c0ecf8aa8ab0dc198fca30748d50e0ccea1671e22ffcd651cf925dd7e48993cf'
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+download_file() {
+    local url="$1" out="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 5 --retry-delay 5 --max-time 300 -o "${out}" "${url}"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "${out}" "${url}"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "${url}" "${out}" <<'PY'
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=300) as response:
+    with open(sys.argv[2], "wb") as handle:
+        handle.write(response.read())
+PY
+    else
+        fail "curl, wget and python3 are all missing; cannot fetch the Droidian keyring"
+    fi
+}
 
 [ "$(id -u)" -eq 0 ] || fail "this script must run as root inside the build container"
 [ -d "${KERNEL_SRC}" ] || fail "kernel tree not found: ${KERNEL_SRC}"
@@ -1727,6 +1871,16 @@ if [ "${SKIP_APT}" != "1" ]; then
         log "Droidian key: ${DROIDIAN_KEY} -> ${KEY_TARGET}"
     fi
 
+    log "Refreshing the Droidian archive keyring"
+    KEYRING_DEB="/tmp/droidian-archive-keyring.deb"
+    KEYRING_DIR="$(mktemp -d)"
+    download_file "${DROIDIAN_KEYRING_URL}" "${KEYRING_DEB}"
+    echo "${DROIDIAN_KEYRING_SHA256}  ${KEYRING_DEB}" | sha256sum -c -
+    dpkg-deb -x "${KEYRING_DEB}" "${KEYRING_DIR}"
+    install -m 0644 "${KEYRING_DIR}/usr/share/archive-keyrings/droidian.gpg" \
+        /usr/share/archive-keyrings/droidian.gpg
+    rm -rf "${KEYRING_DEB}" "${KEYRING_DIR}"
+
     log "Refreshing APT metadata"
     apt-get update -o Acquire::Retries=5
 
@@ -1739,7 +1893,8 @@ if [ "${SKIP_APT}" != "1" ]; then
         linux-initramfs-halium-generic:arm64 \
         lz4 \
         cpio \
-        kmod
+        kmod \
+        patch
 
     [ -f /usr/share/linux-packaging-snippets/kernel-snippet.mk ] || \
         fail "linux-packaging-snippets did not install kernel-snippet.mk"
@@ -1764,7 +1919,7 @@ git checkout -B feature/x6882
 rm -f debian/control
 rm -rf out debian/path-override
 
-git add -A debian arch/arm64/configs/x6882_droidian_defconfig
+git add -A
 git commit --allow-empty -m "x6882: Droidian packaging for kernel ${KERNEL_VERSION}"
 
 # releng-build-package regenerates this file; it must exist and be committed
@@ -1885,10 +2040,10 @@ log "Done"
 ls -l "${ARTIFACTS}"
 printf '\n'
 cat "${ARTIFACTS}/SHA256SUMS"
-X6882_FILE_11_5216400a
+X6882_FILE_13_c374a7ff
 
 log "Writing scripts/patch_vendor_boot_cloud.sh"
-cat > "${TARGET_DIR}/scripts/patch_vendor_boot_cloud.sh" <<'X6882_FILE_12_d509dd46'
+cat > "${TARGET_DIR}/scripts/patch_vendor_boot_cloud.sh" <<'X6882_FILE_14_d509dd46'
 #!/usr/bin/env bash
 #
 # Merge the stock MTK vendor modules into the Droidian/Halium initrd and
@@ -2534,10 +2689,10 @@ cat "${OUTDIR}/SHA256SUMS"
 if [ "${KEEP_WORK}" -eq 1 ]; then
     log "Work directory kept at ${WORKDIR}"
 fi
-X6882_FILE_12_d509dd46
+X6882_FILE_14_d509dd46
 
 log "Writing scripts/prepare_kernel_cloud.sh"
-cat > "${TARGET_DIR}/scripts/prepare_kernel_cloud.sh" <<'X6882_FILE_13_c58bff20'
+cat > "${TARGET_DIR}/scripts/prepare_kernel_cloud.sh" <<'X6882_FILE_15_3647c6f3'
 #!/usr/bin/env bash
 #
 # Prepare the X6882 Droidian kernel defconfig without a full kernel build.
@@ -2582,6 +2737,9 @@ fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 [ -f "${FRAGMENT}" ]         || fail "fragment not found: ${FRAGMENT}"
 command -v python3 >/dev/null || fail "python3 is required"
 command -v curl >/dev/null    || fail "curl is required"
+
+log "Applying kernel source patches"
+bash "${SCRIPT_DIR}/apply_kernel_patches.sh" "${KERNEL_DIR}"
 
 log "Copying gki_defconfig -> ${DEFCONFIG_NAME}"
 cp "${GKI_DEFCONFIG}" "${DEFCONFIG}"
@@ -2722,25 +2880,27 @@ grep -E '^(CONFIG_(MODVERSIONS|MODULE_FORCE_LOAD|VT|VT_CONSOLE|DEVTMPFS|DEVTMPFS
 
 printf '\nNext: make -C %s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 %s\n' \
     "${KERNEL_DIR}" "Image.gz"
-X6882_FILE_13_c58bff20
+X6882_FILE_15_3647c6f3
 
 log "Verifying SHA-256 checksums"
 (
     cd "${TARGET_DIR}"
     sha256sum -c <<'X6882_CHECKSUMS_EOF'
 64f4bfa67884028c796f4461a9237dd06fb374e4a33f0fc4f4d7f32c54c68e65  .gitignore
-fb5ddbeb97a05afd73038960d48eb9b44dfd52de242f0ceae39ae4debd790559  README.md
-2de7ed6c4011fa5c4b7f88a8bcdbe0a2a6314ac406c31b70bc1b416b8162b57b  .github/workflows/build-droidian-kernel.yml
+34153a45650c206d5b50229a6e9e2e2bbdc3c792b090bbc53d18b78128a830a5  README.md
+ac31360a3287dfc59e35e906d14973e746f38aa25ed4971041b7d4010a1f00e5  .github/workflows/build-droidian-kernel.yml
 b8c3a973a8cd3d6745bd251dd60d9b82aa18404efe3e86d93d617aac785f9d85  anykernel/anykernel.sh
 f220ec04b816a7b8970a151d4e3e489a2e7853015240e9d7bcf1ff101e5bb651  configs/droidian_x6882.conf
+3cd7870096cfbafd2affc8c162b1595b16ba360dcb70d5404dc0fe9b10d2ba6a  patches/0001-fanotify-fionread-fixed-metadata-len.patch
 9680d49cfd0be5974e3490017603577433bf4289c8075d2d2d406d716162eb56  debian/check-config.sh
 ead97536b7fe6d7cd2ec2ac8873f733592e68bd1c558b9798c3a12a272f2001c  debian/copyright
 562dacf36daebf5e5f2d6ada484754b76f5b36b0b2e1a56d94e65fd8a0406ad6  debian/kernel-info.mk
 ddf587e7e15f4324c55e4328de0fd49f5046bb599b28a202682c8eaf49058dd3  debian/rules
 e8e18df40bcd69d6aa404282679186d9b8256ac63a5b4e80d7f081e8a0095a2e  debian/source/format
-5216400ad1c9ab492ab7c806111a8d0bf6964ca5d71e5ef565828fdf2e62a45e  scripts/build_deb_in_container.sh
+6826bd61a15778af652cde44461349fdfbd6f5f697b7f94ffec837184b320b6e  scripts/apply_kernel_patches.sh
+c374a7ff14b0af6e89f87757dce96d3635e06efa451cc1e4e4f656a13a6e9fd7  scripts/build_deb_in_container.sh
 d509dd46a33797d82be9a77a725c4fe156330655e701168d604cd7c919f4d17c  scripts/patch_vendor_boot_cloud.sh
-c58bff20fddfe23d3b5760fff589818ecdc009229b8d842c4e637e88243148d5  scripts/prepare_kernel_cloud.sh
+3647c6f38ab9bff98e9c55b0aed6940ca58f1f0d07a9977a07df1698a3fab434  scripts/prepare_kernel_cloud.sh
 X6882_CHECKSUMS_EOF
 )
 
@@ -2755,6 +2915,7 @@ for path in \
     anykernel/anykernel.sh \
     debian/check-config.sh \
     debian/rules \
+    scripts/apply_kernel_patches.sh \
     scripts/build_deb_in_container.sh \
     scripts/patch_vendor_boot_cloud.sh \
     scripts/prepare_kernel_cloud.sh \
@@ -2782,6 +2943,7 @@ for path in \
     anykernel/anykernel.sh \
     debian/check-config.sh \
     debian/rules \
+    scripts/apply_kernel_patches.sh \
     scripts/build_deb_in_container.sh \
     scripts/patch_vendor_boot_cloud.sh \
     scripts/prepare_kernel_cloud.sh \

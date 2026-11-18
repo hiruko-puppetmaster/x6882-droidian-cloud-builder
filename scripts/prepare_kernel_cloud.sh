@@ -43,6 +43,9 @@ fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 command -v python3 >/dev/null || fail "python3 is required"
 command -v curl >/dev/null    || fail "curl is required"
 
+log "Applying kernel source patches"
+bash "${SCRIPT_DIR}/apply_kernel_patches.sh" "${KERNEL_DIR}"
+
 log "Copying gki_defconfig -> ${DEFCONFIG_NAME}"
 cp "${GKI_DEFCONFIG}" "${DEFCONFIG}"
 
