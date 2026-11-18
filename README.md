@@ -29,6 +29,7 @@ workflow_dispatch
 | SoC | MediaTek Helio G100 (`MT6789`) |
 | Architecture | arm64, GKI 2.0, kernel 5.10 |
 | Boot header | v4 (split `boot` + `vendor_boot`) |
+| Storage | UFS 2.2 (FORESEE `C2G074`), 4096-byte blocks, LU0/LU1 boot LUNs, LU2 user area |
 | `boot_a` / `boot_b` | 64 MiB each |
 | `vendor_boot_a` / `vendor_boot_b` | 64 MiB each |
 | `init_boot_a` / `init_boot_b` | 8 MiB each (too small for the Halium initrd) |
@@ -54,11 +55,15 @@ workflow_dispatch
 | `scripts/patch_vendor_boot_cloud.sh` | Merges the stock MTK modules into the Halium initrd, repacks `boot` and `vendor_boot` |
 | `anykernel/anykernel.sh` | Hardlink-safe AnyKernel3 script (kernel-only update, `split_boot` + `flash_boot`) |
 | `.github/workflows/build-droidian-kernel.yml` | The three CI jobs |
+| `scatter/` | UFS 2.2 scatter, boot-recovery variants, GPT table and validator; see `scatter/README.md` |
 | `setup_repo.sh` | Self-contained bootstrap that recreates every file above and initialises/pushes the git repo |
 
 The kernel tree itself is **not** committed. The workflow clones
 `kernel_common_5.10` shallowly, writes the prepared defconfig into it, and for
 Mode B uses the checkout as the Debian source package root.
+
+`scatter/` was added after the initial bootstrap, so `setup_repo.sh` does not
+recreate it; those files are maintained directly.
 
 ## Prerequisites
 
@@ -269,18 +274,44 @@ Notes:
 
 ## Recovery
 
-Keep the stock dumps. If the phone does not boot:
+Keep the stock dumps. If the phone does not boot after flashing the Droidian
+images:
 
-```bash
-adb reboot bootloader   # or hold the key combo for fastboot
-fastboot flash boot        stock/boot.img
-fastboot flash vendor_boot stock/vendor_boot.img
-fastboot reboot
-```
+1. **Try the other slot first.** If only slot A was flashed, slot B still has
+   stock images:
 
-Flashing the stock images back does not require a stock `vbmeta` unless you
-also flashed `vbmeta-disabled.img` and want verification back; in that case
-restore your stock `vbmeta.img` too.
+   ```bash
+   fastboot --set-active=b
+   fastboot reboot
+   ```
+
+   This writes only the boot-control slot marker and is reversible with
+   `fastboot --set-active=a`.
+
+2. **Restore the stock boot chain** on the active slot:
+
+   ```bash
+   fastboot flash boot          stock/boot.img
+   fastboot flash vendor_boot   stock/vendor_boot.img
+   fastboot flash vbmeta        stock/vbmeta.img
+   fastboot flash vbmeta_system stock/vbmeta_system.img
+   fastboot flash vbmeta_vendor stock/vbmeta_vendor.img
+   fastboot reboot
+   ```
+
+   `init_boot` and `dtbo` were never modified and should be left alone.
+   Restoring `vbmeta` is only required if `vbmeta-disabled.img` was flashed,
+   but doing it anyway is harmless: the stock images are AVB-signed and match
+   the stock vbmeta.
+
+3. **If fastboot is unavailable**, use SP Flash Tool with
+   `scatter/MT6789_Android_scatter_UFS_boot_recovery.txt` in *Download Only*
+   mode. This phone is **UFS 2.2**, not eMMC; every `MT6789_Android_scatter.txt`
+   circulating for this model is eMMC-only or has a 12 KiB offset error, and
+   would write the preloader and GPT tail in the wrong place.
+   `scatter/README.md` has the verified partition table and the full procedure.
+
+Never flash or format `userdata` unless the data is expendable.
 
 ## Config and packaging details
 
