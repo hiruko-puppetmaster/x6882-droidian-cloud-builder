@@ -56,6 +56,7 @@ workflow_dispatch
 | `anykernel/anykernel.sh` | Hardlink-safe AnyKernel3 script (kernel-only update, `split_boot` + `flash_boot`) |
 | `.github/workflows/build-droidian-kernel.yml` | The three CI jobs |
 | `scatter/` | UFS 2.2 scatter, boot-recovery variants, GPT table and validator; see `scatter/README.md` |
+| `tools/verify-stock-avb.py` | `avbtool` pre-flight check for the stock boot chain |
 | `setup_repo.sh` | Self-contained bootstrap that recreates every file above and initialises/pushes the git repo |
 
 The kernel tree itself is **not** committed. The workflow clones
@@ -272,6 +273,29 @@ Notes:
   build the Droidian rootfs; install the rootfs with the normal Halium /
   Droidian porting flow and then use these images.
 
+### What AVB sees
+
+`avbtool` was run on both the stock and the built images. The stock chain is
+consistent: `vbmeta.img`, `vbmeta_system.img` and `vbmeta_vendor.img` all carry
+valid `SHA256_RSA2048` signatures, their `system`/`vendor` hashtrees verify,
+the `dtbo` and `vendor_boot` digests match the descriptors in `vbmeta.img`, and
+`boot.img` carries a chained footer signed by the key named in the `boot`
+chain descriptor.
+
+The built images do not fit that chain:
+
+* `boot-droidian.img` contains **no vbmeta footer at all**, so the `boot` chain
+  descriptor has nothing to verify.
+* `vendor_boot-droidian.img` keeps the stock footer but it is stale: `Flags: 3`,
+  `Algorithm: NONE`, and the hash descriptor still declares the stock
+  27,799,552-byte image and stock digest while the partition holds a 225,280-byte
+  vendor image.
+
+Both partitions are rejected before the kernel runs. `vbmeta-disabled.img` is
+therefore mandatory, not optional. Restoring the stock `boot.img` and
+`vendor_boot.img` is enough to undo it; the stock `vbmeta` does not need to be
+reflashed.
+
 ## Recovery
 
 Keep the stock dumps. If the phone does not boot after flashing the Droidian
@@ -288,7 +312,15 @@ images:
    This writes only the boot-control slot marker and is reversible with
    `fastboot --set-active=a`.
 
-2. **Restore the stock boot chain** on the active slot:
+2. **Restore the stock boot chain** on the active slot. First confirm the stock
+   images are consistent:
+
+   ```bash
+   python3 tools/verify-stock-avb.py /path/to/stock
+   ```
+
+   It prints `PASS` when the stock `boot`/`vendor_boot`/`vbmeta` chain matches
+   its AVB descriptors. Then flash:
 
    ```bash
    fastboot flash boot          stock/boot.img
@@ -394,6 +426,12 @@ Never flash or format `userdata` unless the data is expendable.
 * The stock `boot.img` / `vendor_boot.img` headers, AVB footers, ramdisk
   contents, DTB sizes and partition sizes were inspected and the repack logic
   was written against those exact values.
+* The stock AVB chain was verified end to end with `avbtool`: `vbmeta`,
+  `vbmeta_system` and `vbmeta_vendor` signatures, the `system`/`vendor`
+  hashtrees, the `dtbo`/`vendor_boot` hash descriptors, and the chained `boot`
+  footer. The built images were checked the same way, which is how the
+  bootloop cause (`boot-droidian.img` has no footer; `vendor_boot-droidian.img`
+  has a stale one) was identified.
 * The workflow has since been executed end-to-end; see the next section.
 
 ## CI validation
