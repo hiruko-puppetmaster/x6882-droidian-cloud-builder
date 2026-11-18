@@ -55,7 +55,7 @@ workflow_dispatch
 | `scripts/patch_vendor_boot_cloud.sh` | Merges the stock MTK modules into the Halium initrd, repacks `boot` and `vendor_boot` |
 | `anykernel/anykernel.sh` | Hardlink-safe AnyKernel3 script (kernel-only update, `split_boot` + `flash_boot`) |
 | `.github/workflows/build-droidian-kernel.yml` | The three CI jobs |
-| `scatter/` | UFS 2.2 scatter, boot-recovery variants, GPT table and validator; see `scatter/README.md` |
+| `scatter/` | dual-section EMMC+UFS 2.2 scatter, boot-recovery variants, GPT table and validator; see `scatter/README.md` |
 | `tools/verify-stock-avb.py` | `avbtool` pre-flight check for the stock boot chain |
 | `setup_repo.sh` | Self-contained bootstrap that recreates every file above and initialises/pushes the git repo |
 
@@ -337,10 +337,12 @@ images:
    the stock vbmeta.
 
 3. **If fastboot is unavailable**, use SP Flash Tool with
-   `scatter/MT6789_Android_scatter_UFS_boot_recovery.txt` in *Download Only*
-   mode. This phone is **UFS 2.2**, not eMMC; every `MT6789_Android_scatter.txt`
+   `scatter/MT6789_Android_scatter_boot_recovery.txt` in *Download Only* mode.
+   This phone is **UFS 2.2**, not eMMC; every `MT6789_Android_scatter.txt`
    circulating for this model is eMMC-only or has a 12 KiB offset error, and
-   would write the preloader and GPT tail in the wrong place.
+   would write the preloader and GPT tail in the wrong place. The scatters in
+   `scatter/` carry both an EMMC and a UFS section, like MediaTek's
+   dual-layout files; SPFT uses the UFS section on this phone.
    `scatter/README.md` has the verified partition table and the full procedure.
 
 Never flash or format `userdata` unless the data is expendable.

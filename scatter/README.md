@@ -6,13 +6,18 @@ written for eMMC or was derived from a GPT table with a 12 KiB error. Flashing
 one of those can at best fail and at worst write the preloader in the wrong
 place.
 
-This directory contains a validated UFS scatter for the real layout, a
-boot-recovery variant that touches only the `boot`/`vbmeta` chain, the GPT
-table it was built from, and a validator.
+This directory contains a validated dual-section (EMMC + UFS) scatter for the
+real layout, two boot-recovery variants that touch only the `boot`/`vbmeta`
+chain, the GPT table it was built from, and a validator.
 
-> **Do not use `MT6789_Android_scatter.txt` from the firmware folder or from
-> `/sdcard/mtk`, `/sdcard/Download`.** They are eMMC, dual eMMC/UFS, or carry
-> the 12 KiB offset error described below.
+> The phone is UFS 2.2, so SP Flash Tool uses the **UFS** section of these
+> files. The EMMC section mirrors the same GPT purely so the file has the
+> layout MediaTek tools expect; it does not describe real eMMC hardware.
+>
+> Do not use the copies in `/sdcard/mtk` or `/sdcard/Download`; they are
+> eMMC-only or carry the 12 KiB offset error described below. The old
+> eMMC-only scatter from the firmware folder is kept as
+> `MT6789_Android_scatter_eMMC_only_OLD.txt`.
 
 ## Evidence
 
@@ -54,6 +59,30 @@ overlap. Do not "repair" `boot_para` to `0x22000`.
 
 The scatter's `block_size` for UFS is `0x80000` (512 KiB), `boot_channel` is
 `UFSHCI_0`, and every partition uses `storage: HW_STORAGE_UFS`.
+
+## File format
+
+The file follows the MediaTek dual-layout convention: one
+`- storage_type: EMMC` block followed by one `- storage_type: UFS` block. Both
+carry the same 72 entries with the same offsets and sizes; only the region and
+storage names differ:
+
+| Field | EMMC section | UFS section |
+| --- | --- | --- |
+| `storage` | `HW_STORAGE_EMMC` | `HW_STORAGE_UFS` |
+| `boot_channel` | `MSDC_0` | `UFSHCI_0` |
+| `block_size` | `0x20000` | `0x80000` |
+| preloader region | `EMMC_BOOT1_BOOT2` | `UFS_LU0_LU1` |
+| preloader backup region | `EMMC_BOOT2` | `UFS_LU1` |
+| GPT partitions region | `EMMC_USER` | `UFS_LU2` |
+| `flashinfo` marker | `0xFFFF0080` | `0xFFFF0020` |
+| `sgpt` marker | `0xFFFF0000` | `0xFFFF0000` |
+
+SP Flash Tool selects the section that matches the storage it detects; on this
+phone that is always UFS. The EMMC block is a compatibility mirror — there is
+no eMMC dump for X6882, so those entries exist only for tools that expect the
+two-section form. `verify_scatter.py` checks that both sections describe the
+same geometry and enable the same images.
 
 ## Partition table (LUN2)
 
@@ -161,8 +190,9 @@ on different LUNs (`UFS_LU2` vs `UFS_LU0_LU1`).
 
 ## What was wrong with the other scatters
 
-`MT6789_Android_scatter.txt` (the file in the firmware folder, 71 entries,
-30,903 B) is eMMC only:
+The old `MT6789_Android_scatter.txt` from the firmware folder (71 entries,
+30,903 B, now kept as `MT6789_Android_scatter_eMMC_only_OLD.txt`) was eMMC
+only:
 
 | Field | That file | Reality |
 | --- | --- | --- |
@@ -192,22 +222,24 @@ The other two scatters on the phone have the same 12 KiB error:
 
 ## Files in this directory
 
-| File | Enabled entries | Use |
+| File | Enabled per section | Use |
 | --- | --- | --- |
-| `MT6789_Android_scatter_UFS.txt` | 39 | complete map: preloader, preloader backup, both slots' firmware, `super` |
-| `MT6789_Android_scatter_UFS_boot_recovery.txt` | 5 | slot A boot chain only: `boot_a`, `vendor_boot_a`, `vbmeta_a`, `vbmeta_system_a`, `vbmeta_vendor_a` |
-| `MT6789_Android_scatter_UFS_boot_recovery_ab.txt` | 10 | same for slots A and B |
+| `MT6789_Android_scatter.txt` | 39 | complete map: preloader, preloader backup, both slots' firmware, `super` |
+| `MT6789_Android_scatter_boot_recovery.txt` | 5 | slot A boot chain only: `boot_a`, `vendor_boot_a`, `vbmeta_a`, `vbmeta_system_a`, `vbmeta_vendor_a` |
+| `MT6789_Android_scatter_boot_recovery_ab.txt` | 10 | same for slots A and B |
 | `GPT_PARTITION_TABLE_UFS.csv` | – | GPT table parsed from the dump |
 | `verify_scatter.py` | – | checks a scatter against the CSV |
 
-All three scatters keep the same 72 entries and the same geometry; the variants
-differ only in `is_download`/`file_name`. `preloader`, `preloader_backup`,
-`super` and `userdata` are disabled in both recovery variants.
+Each file has 72 entries in the EMMC section and the same 72 in the UFS
+section, with identical geometry. The variants differ only in
+`is_download`/`file_name`, and the choice is mirrored in both sections.
+`preloader`, `preloader_backup`, `super` and `userdata` are disabled in both
+recovery variants.
 
 ```
-b912b3ac3bf57f1de39fa3837c6f14eba02744df264a84a7fa8880e83fdf925c  MT6789_Android_scatter_UFS.txt
-580db0d2726c72dec237334b7a0f97c7b3674ba13e24986a544b25a854fcfaee  MT6789_Android_scatter_UFS_boot_recovery.txt
-fac349bb1debdbd24e503fe6dafe17e9e54af5a7ad959b479c077e4d93eac10d  MT6789_Android_scatter_UFS_boot_recovery_ab.txt
+67d54d4156959b52286aa9610a34ea5830fe18662f7216be671de8ec05d32db8  MT6789_Android_scatter.txt
+4a6eaa5997bd09ce24b26bfb43e50a17790721d5a40927cf16a093de6f250f06  MT6789_Android_scatter_boot_recovery.txt
+f5d80c09ea7ddf52772790891f1cc4c9b6bccb80a960b6fb51abb5de837a9f28  MT6789_Android_scatter_boot_recovery_ab.txt
 95c3975782efe9c14d2f7bb7b3252f3cd1eedff07742062af5c5ca8a77d8feca  GPT_PARTITION_TABLE_UFS.csv
 ```
 
@@ -250,7 +282,7 @@ unlock`).
 
 ### 3. SP Flash Tool, only if fastboot is gone
 
-Use `MT6789_Android_scatter_UFS_boot_recovery.txt` and **Download Only** mode.
+Use `MT6789_Android_scatter_boot_recovery.txt` and **Download Only** mode.
 Only the five `boot`/`vbmeta` entries are checked; leave everything else
 unchecked. Do **not** select *Format All + Download* and do **not** tick
 `userdata`.
@@ -292,9 +324,11 @@ python3 verify_scatter.py                       # all three scatters
 python3 verify_scatter.py --images /path/to/fw  # also check image sizes
 ```
 
-It checks the storage header (`UFS`, `UFSHCI_0`, `0x80000`), that every entry
-is `HW_STORAGE_UFS` with a known UFS region, that the preloader and `pgpt`
-geometry is right, that the 68 GPT partitions match the CSV offset and size
-exactly, that the sentinels resolve into the reserved tail, that `userdata`
-ends where `flashinfo` begins, and that no two LUN2 ranges overlap. The old
-eMMC scatter fails on the first four checks.
+It checks both sections: the header of each (`UFS`/`UFSHCI_0`/`0x80000` and
+`EMMC`/`MSDC_0`/`0x20000`), that every entry carries the matching storage tag
+and a known region, that the preloader and `pgpt` geometry is right, that the
+68 GPT partitions match the CSV offset and size exactly, that the sentinels
+resolve into the reserved tail, that `userdata` ends where `flashinfo` begins,
+and that no two user-area ranges overlap. When both sections are present it
+also checks that they describe the same geometry and enable the same images.
+The old eMMC scatter fails on the first checks.
