@@ -1,0 +1,405 @@
+name: Build Droidian kernel for X6882
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build mode"
+        type: choice
+        required: true
+        default: raw_gki_image
+        options:
+          - raw_gki_image
+          - droidian_deb_package
+          - both
+      kernel_ref:
+        description: "kernel_common_5.10 branch"
+        type: string
+        required: false
+        default: android12-5.10-rebased
+      clang_version:
+        description: "Clang toolchain"
+        type: choice
+        required: true
+        default: "12.0.5"
+        options:
+          - "12.0.5"
+          - "14.0.0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  KERNEL_REPO: https://github.com/XTENSEI/kernel_common_5.10.git
+  KERNEL_REF: ${{ github.event.inputs.kernel_ref || 'android12-5.10-rebased' }}
+  CLANG_VERSION: ${{ github.event.inputs.clang_version || '12.0.5' }}
+  CLANG_12_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r21/clang-r416183b.tar.gz
+  CLANG_14_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-13.0.0_r1/clang-r450784d.tar.gz
+  MAGISK_APK_URL: https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk
+  MAGISK_APK_SHA256: 8bfd3346b3da5814f82eff6f1b1b5fedd0ad585f39a25709b23eb54aac45691d
+  MAGISKBOOT_SHA256: 1ef29846a363db25d3f277de5619e01878241ff3d9bf760bddda994419198dcc
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Mode A: raw GKI Image.gz + AnyKernel3 flashable zip
+  # ---------------------------------------------------------------------
+  build-image:
+    name: Mode A - Image.gz + AnyKernel3
+    if: >-
+      github.event_name == 'push' ||
+      github.event.inputs.mode == 'raw_gki_image' ||
+      github.event.inputs.mode == 'both'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          set -x
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          docker image prune -af || true
+          df -h
+          nproc
+          free -h
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev \
+            rsync cpio lz4 zip unzip python3 perl \
+            build-essential binutils-aarch64-linux-gnu
+
+      - name: Restore Clang
+        id: clang-cache
+        uses: actions/cache@v4
+        with:
+          path: .toolchain
+          key: clang-${{ env.CLANG_VERSION }}-${{ runner.os }}-v1
+
+      - name: Download Clang
+        run: |
+          set -euo pipefail
+          case "$CLANG_VERSION" in
+            12.0.5) CLANG_DIR=clang-r416183b; CLANG_URL="$CLANG_12_URL" ;;
+            14.0.0) CLANG_DIR=clang-r450784d; CLANG_URL="$CLANG_14_URL" ;;
+            *) echo "::error::unknown Clang version $CLANG_VERSION"; exit 1 ;;
+          esac
+          echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
+          mkdir -p ".toolchain/$CLANG_DIR"
+          if [ ! -x ".toolchain/$CLANG_DIR/bin/clang" ]; then
+            echo "Downloading $CLANG_URL"
+            curl -fsSL --retry 4 --retry-delay 5 --max-time 600 "$CLANG_URL" \
+              | tar -xz -C ".toolchain/$CLANG_DIR"
+          fi
+          ".toolchain/$CLANG_DIR/bin/clang" --version
+
+      - name: Clone kernel
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$KERNEL_REF" "$KERNEL_REPO" kernel
+          test -f kernel/arch/arm64/configs/gki_defconfig
+          git -C kernel log --oneline -n 1
+
+      - name: Prepare Droidian defconfig
+        run: |
+          set -euo pipefail
+          bash scripts/prepare_kernel_cloud.sh kernel "$PWD/configs/droidian_x6882.conf"
+          cp kernel/arch/arm64/configs/x6882_droidian_defconfig \
+             "$RUNNER_TEMP/x6882_droidian_defconfig"
+
+      - name: Build Image.gz
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/.toolchain/$CLANG_DIR/bin:$PATH"
+          BUILD_DIR="$PWD/build"
+          mkdir -p "$BUILD_DIR"
+          COMMON_ARGS=(
+            -C kernel
+            O="$BUILD_DIR"
+            ARCH=arm64
+            LLVM=1
+            LLVM_IAS=1
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CLANG_TRIPLE=aarch64-linux-gnu-
+          )
+          make "${COMMON_ARGS[@]}" -j"$(nproc)" x6882_droidian_defconfig
+          make "${COMMON_ARGS[@]}" -j"$(nproc)" Image.gz
+          test -s "$BUILD_DIR/arch/arm64/boot/Image.gz"
+          gzip -t "$BUILD_DIR/arch/arm64/boot/Image.gz"
+          cp "$BUILD_DIR/arch/arm64/boot/Image.gz" "$PWD/Image.gz"
+          cp "$BUILD_DIR/.config" "$PWD/kernel.config"
+          ls -l Image.gz kernel.config
+
+      - name: Package AnyKernel3
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/osm0sis/AnyKernel3.git anykernel3
+          git -C anykernel3 checkout 41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1
+          cp anykernel/anykernel.sh anykernel3/anykernel.sh
+          cp Image.gz anykernel3/Image.gz
+          rm -rf anykernel3/.git anykernel3/.github anykernel3/README.md
+          find anykernel3 -name '*placeholder' -delete
+          ( cd anykernel3 && zip -r9 "$PWD/../x6882-droidian-anykernel3.zip" . )
+          unzip -l x6882-droidian-anykernel3.zip | sed -n '1,40p'
+          unzip -p x6882-droidian-anykernel3.zip anykernel.sh | head -n 5
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          {
+            printf 'kernel_ref=%s\n' "$KERNEL_REF"
+            printf 'clang_version=%s\n' "$CLANG_VERSION"
+            printf 'kernel_release=%s\n' "$(make -s -C kernel O="$PWD/build" ARCH=arm64 kernelrelease 2>/dev/null || true)"
+            printf 'image_gz_sha256=%s\n' "$(sha256sum Image.gz | awk '{print $1}')"
+            printf 'anykernel_sha256=%s\n' "$(sha256sum x6882-droidian-anykernel3.zip | awk '{print $1}')"
+          } > manifest-mode-a.txt
+          sha256sum Image.gz x6882-droidian-anykernel3.zip manifest-mode-a.txt > SHA256SUMS-mode-a
+          cat manifest-mode-a.txt
+
+      - name: Upload raw image and AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: mode-a-raw-gki-image
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            Image.gz
+            x6882-droidian-anykernel3.zip
+            kernel.config
+            manifest-mode-a.txt
+            SHA256SUMS-mode-a
+
+  # ---------------------------------------------------------------------
+  # Mode B: Droidian Debian packages + boot/vbmeta images
+  # ---------------------------------------------------------------------
+  build-debs:
+    name: Mode B - Droidian Debian packages
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.mode == 'droidian_deb_package' ||
+       github.event.inputs.mode == 'both')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          set -x
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          docker image prune -af || true
+          df -h
+          nproc
+          free -h
+
+      - name: Clone kernel
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$KERNEL_REF" "$KERNEL_REPO" kernel
+          test -f kernel/arch/arm64/configs/gki_defconfig
+          git -C kernel log --oneline -n 1
+          git -C kernel remote get-url origin
+
+      - name: Prepare Droidian defconfig
+        run: |
+          set -euo pipefail
+          bash scripts/prepare_kernel_cloud.sh kernel "$PWD/configs/droidian_x6882.conf"
+          cp kernel/arch/arm64/configs/x6882_droidian_defconfig \
+             "$RUNNER_TEMP/x6882_droidian_defconfig"
+
+      - name: Install packaging files into the kernel tree
+        run: |
+          set -euo pipefail
+          cp -a debian kernel/debian
+          chmod +x kernel/debian/rules kernel/debian/check-config.sh
+          test -f kernel/debian/source/format
+          ls -la kernel/debian
+
+      - name: Pull Droidian build container
+        run: |
+          set -euo pipefail
+          docker pull quay.io/droidian/build-essential:trixie-amd64
+          docker image inspect quay.io/droidian/build-essential:trixie-amd64 \
+            --format '{{.Id}} {{.Size}}'
+
+      - name: Build packages in the container
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          docker run --rm \
+            -e KERNEL_SRC=/build/linux-android-infinix-x6882 \
+            -e ARTIFACTS=/artifacts \
+            -e JOBS="$(nproc)" \
+            -v "$PWD/kernel:/build/linux-android-infinix-x6882" \
+            -v "$PWD/out:/artifacts" \
+            -v "$PWD/scripts:/scripts:ro" \
+            quay.io/droidian/build-essential:trixie-amd64 \
+            bash /scripts/build_deb_in_container.sh
+
+      - name: Verify extracted images
+        run: |
+          set -euo pipefail
+          test -s out/boot-droidian-base.img
+          test -s out/vbmeta-disabled.img
+          test -s out/Image.gz
+          python3 - <<'PY'
+          import glob
+          import struct
+
+          boot = open("out/boot-droidian-base.img", "rb").read(8)
+          assert boot == b"ANDROID!", boot
+          vbmeta = open("out/vbmeta-disabled.img", "rb").read(4)
+          assert vbmeta == b"AVB0", vbmeta
+          debs = glob.glob("out/debs/*.deb")
+          assert debs, "no .deb files"
+          print(f"boot image magic OK, vbmeta magic OK, {len(debs)} deb(s)")
+          PY
+          ls -l out out/debs
+          cat out/manifest.txt
+
+      - name: Upload Droidian debs and images
+        uses: actions/upload-artifact@v4
+        with:
+          name: mode-b-droidian-debs
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            out/debs
+            out/boot-droidian-base.img
+            out/boot.img
+            out/vbmeta-disabled.img
+            out/Image.gz
+            out/config-*
+            out/System.map-*
+            out/manifest.txt
+            out/SHA256SUMS
+
+  # ---------------------------------------------------------------------
+  # Merge the stock MTK vendor modules and repack both images
+  # ---------------------------------------------------------------------
+  patch-images:
+    name: Repack boot/vendor_boot for the device
+    needs: build-debs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Download Mode B artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mode-b-droidian-debs
+          path: mode-b
+
+      - name: Verify Mode B artifacts
+        run: |
+          set -euo pipefail
+          test -s mode-b/boot-droidian-base.img
+          test -s mode-b/vbmeta-disabled.img
+          test -s mode-b/Image.gz
+          ls -l mode-b
+
+      - name: Check the dump-assets release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view dump-assets --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release 'dump-assets' not found. Upload stock boot.img and vendor_boot.img to a release named dump-assets."
+            exit 1
+          fi
+          gh release view dump-assets --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name'
+
+      - name: Download stock boot and vendor_boot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p stock
+          gh release download dump-assets --repo "$GITHUB_REPOSITORY" \
+            --pattern boot.img --pattern vendor_boot.img --dir stock --clobber
+          python3 - <<'PY'
+          import os
+
+          for name, magic in (("stock/boot.img", b"ANDROID!"),
+                              ("stock/vendor_boot.img", b"VNDRBOOT")):
+              size = os.path.getsize(name)
+              with open(name, "rb") as fh:
+                  head = fh.read(8)
+              assert head == magic, f"{name}: unexpected magic {head!r}"
+              assert size == 67108864, f"{name}: expected 64 MiB, got {size}"
+              print(f"{name}: {size} bytes, magic OK")
+          PY
+
+      - name: Download Magisk v28.1 magiskboot
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 4 --retry-delay 5 --max-time 300 \
+            -o Magisk-v28.1.apk "$MAGISK_APK_URL"
+          echo "$MAGISK_APK_SHA256  Magisk-v28.1.apk" | sha256sum -c -
+          unzip -o Magisk-v28.1.apk lib/x86_64/libmagiskboot.so -d magisk
+          cp magisk/lib/x86_64/libmagiskboot.so magiskboot
+          chmod +x magiskboot
+          echo "$MAGISKBOOT_SHA256  magiskboot" | sha256sum -c -
+          ./magiskboot 2>&1 | head -n 5 || true
+
+      - name: Repack images
+        run: |
+          set -euo pipefail
+          bash scripts/patch_vendor_boot_cloud.sh \
+            --magiskboot magiskboot \
+            --droidian-boot mode-b/boot-droidian-base.img \
+            --vendor-boot stock/vendor_boot.img \
+            --image mode-b/Image.gz \
+            --outdir out \
+            --keep-work
+
+      - name: Summarize
+        run: |
+          set -euo pipefail
+          {
+            echo "### X6882 Droidian images"
+            echo
+            echo '```'
+            cat out/manifest.txt
+            echo '```'
+            echo
+            echo '```'
+            cat out/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ls -l out
+
+      - name: Upload flashable images
+        uses: actions/upload-artifact@v4
+        with:
+          name: x6882-droidian-boot-images
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            out/boot-droidian.img
+            out/vendor_boot-droidian.img
+            out/vbmeta-disabled.img
+            out/manifest.txt
+            out/SHA256SUMS

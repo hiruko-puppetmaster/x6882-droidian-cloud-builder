@@ -1,0 +1,16 @@
+# Local build outputs
+/out/
+/build/
+/kernel/
+/.toolchain/
+/anykernel3/
+/stock/
+/mode-b/
+/Image.gz
+/kernel.config
+/magiskboot
+/Magisk-*.apk
+
+# Logs and scratch files
+*.log
+*.tmp
