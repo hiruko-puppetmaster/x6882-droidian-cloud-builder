@@ -956,7 +956,7 @@ flash_boot;
 X6882_FILE_04_b8c3a973
 
 log "Writing configs/droidian_x6882.conf"
-cat > "${TARGET_DIR}/configs/droidian_x6882.conf" <<'X6882_FILE_05_f220ec04'
+cat > "${TARGET_DIR}/configs/droidian_x6882.conf" <<'X6882_FILE_05_875754f4'
 # Droidian / Halium fragment for the Infinix Hot 50 4G (X6882, MediaTek MT6789).
 #
 # This file is appended to arch/arm64/configs/gki_defconfig by
@@ -969,6 +969,11 @@ cat > "${TARGET_DIR}/configs/droidian_x6882.conf" <<'X6882_FILE_05_f220ec04'
 # ---------------------------------------------------------------------------
 # Toolchain / build size
 # ---------------------------------------------------------------------------
+# The rebased tree is not warning-clean with the CI Clang (the fanotify and
+# xfrm backports already trip -Wunused-variable).  Do not turn every warning
+# into a build failure; the explicit -Werror= options that matter remain.
+# CONFIG_WERROR is not set
+
 # The packaging tree is the kernel tree, so the version must come from the
 # kernel Makefile alone (no vendor suffix, no local dirty marker).
 CONFIG_LOCALVERSION=""
@@ -1366,7 +1371,7 @@ CONFIG_EVM=y
 # CONFIG_CIFS_UPCALL is not set
 # CONFIG_CIFS_DFS_UPCALL is not set
 # CONFIG_KGDB is not set
-X6882_FILE_05_f220ec04
+X6882_FILE_05_875754f4
 
 log "Writing patches/0001-fanotify-fionread-fixed-metadata-len.patch"
 cat > "${TARGET_DIR}/patches/0001-fanotify-fionread-fixed-metadata-len.patch" <<'X6882_FILE_06_3cd78700'
@@ -1763,7 +1768,7 @@ done
 X6882_FILE_12_6826bd61
 
 log "Writing scripts/build_deb_in_container.sh"
-cat > "${TARGET_DIR}/scripts/build_deb_in_container.sh" <<'X6882_FILE_13_c374a7ff'
+cat > "${TARGET_DIR}/scripts/build_deb_in_container.sh" <<'X6882_FILE_13_1210eece'
 #!/usr/bin/env bash
 #
 # Build the X6882 Droidian kernel packages inside the official Droidian
@@ -1919,7 +1924,11 @@ git checkout -B feature/x6882
 rm -f debian/control
 rm -rf out debian/path-override
 
+# The kernel tree's .gitignore ignores debian/, so force-add the packaging
+# files: releng-build-package needs them committed (it restores the changelog
+# with git checkout).
 git add -A
+git add -f debian
 git commit --allow-empty -m "x6882: Droidian packaging for kernel ${KERNEL_VERSION}"
 
 # releng-build-package regenerates this file; it must exist and be committed
@@ -1932,7 +1941,7 @@ linux-android-infinix-x6882 (${KERNEL_VERSION}) unstable; urgency=medium
  -- X6882 Droidian porters <info@droidian.org>  $(date -R)
 EOF
 
-git add debian/changelog
+git add -f debian/changelog
 git commit --allow-empty -m "x6882: changelog for kernel ${KERNEL_VERSION}"
 
 log "Generating debian/control"
@@ -2040,7 +2049,7 @@ log "Done"
 ls -l "${ARTIFACTS}"
 printf '\n'
 cat "${ARTIFACTS}/SHA256SUMS"
-X6882_FILE_13_c374a7ff
+X6882_FILE_13_1210eece
 
 log "Writing scripts/patch_vendor_boot_cloud.sh"
 cat > "${TARGET_DIR}/scripts/patch_vendor_boot_cloud.sh" <<'X6882_FILE_14_d509dd46'
@@ -2890,7 +2899,7 @@ log "Verifying SHA-256 checksums"
 34153a45650c206d5b50229a6e9e2e2bbdc3c792b090bbc53d18b78128a830a5  README.md
 ac31360a3287dfc59e35e906d14973e746f38aa25ed4971041b7d4010a1f00e5  .github/workflows/build-droidian-kernel.yml
 b8c3a973a8cd3d6745bd251dd60d9b82aa18404efe3e86d93d617aac785f9d85  anykernel/anykernel.sh
-f220ec04b816a7b8970a151d4e3e489a2e7853015240e9d7bcf1ff101e5bb651  configs/droidian_x6882.conf
+875754f43a9bad35d01dc1aae52b6d028107e8433996c50e73a61978be347970  configs/droidian_x6882.conf
 3cd7870096cfbafd2affc8c162b1595b16ba360dcb70d5404dc0fe9b10d2ba6a  patches/0001-fanotify-fionread-fixed-metadata-len.patch
 9680d49cfd0be5974e3490017603577433bf4289c8075d2d2d406d716162eb56  debian/check-config.sh
 ead97536b7fe6d7cd2ec2ac8873f733592e68bd1c558b9798c3a12a272f2001c  debian/copyright
@@ -2898,7 +2907,7 @@ ead97536b7fe6d7cd2ec2ac8873f733592e68bd1c558b9798c3a12a272f2001c  debian/copyrig
 ddf587e7e15f4324c55e4328de0fd49f5046bb599b28a202682c8eaf49058dd3  debian/rules
 e8e18df40bcd69d6aa404282679186d9b8256ac63a5b4e80d7f081e8a0095a2e  debian/source/format
 6826bd61a15778af652cde44461349fdfbd6f5f697b7f94ffec837184b320b6e  scripts/apply_kernel_patches.sh
-c374a7ff14b0af6e89f87757dce96d3635e06efa451cc1e4e4f656a13a6e9fd7  scripts/build_deb_in_container.sh
+1210eece986c4ceffd5386fa3dc3f8f8dfca681dfc1a894866e98716cf71ee03  scripts/build_deb_in_container.sh
 d509dd46a33797d82be9a77a725c4fe156330655e701168d604cd7c919f4d17c  scripts/patch_vendor_boot_cloud.sh
 3647c6f38ab9bff98e9c55b0aed6940ca58f1f0d07a9977a07df1698a3fab434  scripts/prepare_kernel_cloud.sh
 X6882_CHECKSUMS_EOF

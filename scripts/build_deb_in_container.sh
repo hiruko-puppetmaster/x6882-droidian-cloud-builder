@@ -153,7 +153,11 @@ git checkout -B feature/x6882
 rm -f debian/control
 rm -rf out debian/path-override
 
+# The kernel tree's .gitignore ignores debian/, so force-add the packaging
+# files: releng-build-package needs them committed (it restores the changelog
+# with git checkout).
 git add -A
+git add -f debian
 git commit --allow-empty -m "x6882: Droidian packaging for kernel ${KERNEL_VERSION}"
 
 # releng-build-package regenerates this file; it must exist and be committed
@@ -166,7 +170,7 @@ linux-android-infinix-x6882 (${KERNEL_VERSION}) unstable; urgency=medium
  -- X6882 Droidian porters <info@droidian.org>  $(date -R)
 EOF
 
-git add debian/changelog
+git add -f debian/changelog
 git commit --allow-empty -m "x6882: changelog for kernel ${KERNEL_VERSION}"
 
 log "Generating debian/control"
