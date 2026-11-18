@@ -363,9 +363,36 @@ restore your stock `vbmeta.img` too.
 * The stock `boot.img` / `vendor_boot.img` headers, AVB footers, ramdisk
   contents, DTB sizes and partition sizes were inspected and the repack logic
   was written against those exact values.
-* The workflow itself has not been executed yet. The first CI run will
-  validate the container paths, GNU cpio hardlink handling and the
-  `releng-build-package` invocation.
+* The workflow has since been executed end-to-end; see the next section.
+
+## CI validation
+
+Both modes were run on the GitHub-hosted runner with builder commit `62e76da`
+(Clang 12.0.5, `android12-5.10-rebased`, kernel 5.10.274).
+
+* **Mode A** - run
+  [44262796584](https://github.com/hiruko-puppetmaster/x6882-droidian-cloud-builder/actions/runs/44262796584):
+  compile finished in 13m18s. `Image.gz` is 15,861,671 bytes with SHA-256
+  `6bc408338d7600f6b38da26da5d46f45f433a99a97049a7f3ac6b43707c61dc2`;
+  the AnyKernel3 zip is SHA-256
+  `b3147d83bb7000f506ee81840456bc605d6c895213926645c781638b17a7424e`.
+* **Mode B** - run
+  [44262916297](https://github.com/hiruko-puppetmaster/x6882-droidian-cloud-builder/actions/runs/44262916297):
+  six arm64 packages built through `releng-build-package`, version
+  `5.10.274+git20261118081318.5e9b89c.x6882`. The base boot image is
+  36,114,432 bytes, `Image.gz` is 15,861,671 bytes and the disabled vbmeta
+  image is 4,096 bytes.
+* **Repack** - the same run merged 210 stock modules, skipped 8 and copied and
+  listed 179 in dependency order. The uncompressed initrd is 71,902,208 bytes
+  and the boot header carries a 26,294,927-byte LZ4 ramdisk. Both output
+  images are exactly 67,108,864 bytes:
+  * `boot-droidian.img` SHA-256
+    `fd2809f69c42b4cd735c45ff88ec236447ecf32bda47bcbb7c01d5a994c69e26`
+  * `vendor_boot-droidian.img` SHA-256
+    `1ba6296fa556f515de4d9bccdf8ed6f22e4148ce7fa1ec8e141340e4619aba38`
+  * both headers carry the exact required cmdline; the vendor DTB is
+    preserved at 212,093 bytes; the boot initrd contains 1,093 entries; the
+    built-in verifier prints `verification: OK`.
 
 ## Local footprint
 
